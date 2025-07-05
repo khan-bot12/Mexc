@@ -2,41 +2,47 @@ import time
 import hmac
 import hashlib
 import requests
-import logging
 import os
+import logging
 
-# Load credentials from environment
+# Setup logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("trade")
+
+# ENV vars
 MEXC_API_KEY = os.getenv("MEXC_API_KEY")
 MEXC_API_SECRET = os.getenv("MEXC_API_SECRET")
+BASE_URL = "https://api.mexc.com"
 
-# Set up logger
-logger = logging.getLogger("trade")
-logging.basicConfig(level=logging.INFO)
-
-BASE_URL = "https://contract.mexc.com"
-
-def generate_signature(api_secret, req_time, params):
+def generate_signature(secret_key, req_time, params):
     sorted_params = sorted(params.items())
-    query_string = "&".join([f"{key}={value}" for key, value in sorted_params])
-    to_sign = f"{query_string}&req_time={req_time}"
-    return hmac.new(api_secret.encode(), to_sign.encode(), hashlib.sha256).hexdigest()
+    query_string = "&".join(f"{key}={value}" for key, value in sorted_params)
+    message = f"{req_time}{query_string}"
+    signature = hmac.new(secret_key.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return signature
 
 def get_position(symbol):
-    url = f"{BASE_URL}/api/v1/private/position/list"
-    req_time = str(int(time.time() * 1000))
-    params = {
-        "api_key": MEXC_API_KEY,
-        "req_time": req_time
-    }
-    sign = generate_signature(MEXC_API_SECRET, req_time, params)
-    params["sign"] = sign
-
     try:
+        logger.info("📊 Getting current positions...")
+
+        req_time = str(int(time.time() * 1000))
+        params = {
+            "api_key": MEXC_API_KEY,
+            "req_time": req_time,
+            "symbol": symbol.upper(),
+        }
+        sign = generate_signature(MEXC_API_SECRET, req_time, params)
+        params["sign"] = sign
+
+        url = f"{BASE_URL}/api/v1/private/position/list/one"
         response = requests.get(url, params=params)
-        return response.json()
+        data = response.json()
+        logger.info(f"📊 Current Position Info: {data}")
+        return data
+
     except Exception as e:
-        logger.error(f"❌ Error fetching position: {e}")
-        return None
+        logger.error(f"❌ Error getting position: {e}")
+        return {"error": str(e)}
 
 def place_order(action, symbol, quantity, leverage):
     try:
@@ -55,7 +61,7 @@ def place_order(action, symbol, quantity, leverage):
             "side": side,
             "open_type": 2,  # Cross margin
             "positionId": 0,
-            "orderType": 1,  # Market order
+            "orderType": 1  # Market order
         }
 
         sign = generate_signature(MEXC_API_SECRET, req_time, params)
@@ -64,8 +70,12 @@ def place_order(action, symbol, quantity, leverage):
         logger.info(f"🔐 Order Payload: {params}")
         url = f"{BASE_URL}/api/v1/private/order/submit"
         response = requests.post(url, data=params)
-        logger.info(f"✅ Order Response: {response.json()}")
-        return response.json()
+
+        logger.info(f"📩 Raw response text: {response.text}")
+        data = response.json()
+        logger.info(f"✅ Order Response: {data}")
+        return data
+
     except Exception as e:
         logger.error(f"❌ Exception in place_order: {e}")
         return {"error": str(e)}
