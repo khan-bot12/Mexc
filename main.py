@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request
-import uvicorn
 import logging
 from trade import place_order
 
 app = FastAPI()
+
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
@@ -13,23 +14,20 @@ async def webhook(request: Request):
         data = await request.json()
         logger.info(f"Incoming webhook data: {data}")
 
-        # Extract data from webhook
-        action = data.get("action")
-        symbol = data.get("symbol")
+        # Extract and validate fields
+        action = str(data.get("action")).lower()
+        symbol = str(data.get("symbol")).upper()
         quantity = float(data.get("quantity"))
         leverage = int(data.get("leverage"))
 
         logger.info(f"📦 Parsed → action: {action}, symbol: {symbol}, quantity: {quantity}, leverage: {leverage}")
 
-        # Place the order
+        # Call place_order from trade.py
         result = place_order(action, symbol, quantity, leverage)
         logger.info(f"📤 Result from place_order: {result}")
-        return {"status": "ok", "result": result}
 
+        return {"status": "success", "details": result}
+    
     except Exception as e:
-        logger.error(f"❌ Error processing webhook: {e}")
+        logger.error(f"❌ Error in webhook handler: {e}")
         return {"status": "error", "message": str(e)}
-
-# Optional: Run this if using `python main.py` locally
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=10000)
