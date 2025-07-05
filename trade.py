@@ -5,71 +5,71 @@ import requests
 import logging
 import os
 
+# Load API keys from Render environment variables
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
+
 BASE_URL = "https://api.mexc.com"
 
-headers = {
+HEADERS = {
     "Content-Type": "application/json",
     "ApiKey": API_KEY
 }
 
-def generate_signature(req_time, sign_params):
-    sign_str = f"{API_KEY}{req_time}{sign_params}"
-    signature = hmac.new(API_SECRET.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest()
-    return signature
+def sign_request(params: dict) -> dict:
+    """Generate MEXC signature for request."""
+    t = str(int(time.time() * 1000))
+    params["timestamp"] = t
+    query_string = '&'.join(f"{key}={params[key]}" for key in sorted(params))
+    signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    params["sign"] = signature
+    return params
+
+def get_position(symbol: str):
+    """Fetch current position for given symbol."""
+    try:
+        url = f"{BASE_URL}/api/v1/private/contract/position/list/one"
+        params = {
+            "symbol": symbol
+        }
+        signed_params = sign_request(params)
+        response = requests.get(url, headers=HEADERS, params=signed_params)
+        return response.json()
+    except Exception as e:
+        logging.error(f"Exception while getting position: {e}")
+        return None
 
 def place_order(action, symbol, quantity, leverage):
     try:
-        side = "OPEN_LONG" if action == "buy" else "OPEN_SHORT"
-        position_side = "LONG" if action == "buy" else "SHORT"
-        margin_mode = "crossed"  # For cross margin
+        logging.info("📊 Getting current positions...")
+        current_pos = get_position(symbol)
+        logging.info(f"📊 Current Position Info: {current_pos}")
 
-        # Step 1: Get current positions (optional)
-        pos_req_time = str(int(time.time() * 1000))
-        pos_params = f"symbol={symbol}&marginMode={margin_mode}"
-        pos_sign = generate_signature(pos_req_time, pos_params)
-        pos_headers = headers.copy()
-        pos_headers.update({
-            "Request-Time": pos_req_time,
-            "Signature": pos_sign
-        })
+        # Prepare order
+        side = "OPEN_LONG" if action.lower() == "buy" else "OPEN_SHORT"
 
-        pos_url = f"{BASE_URL}/api/v1/private/futures/position/open-position"
-        logging.info(f"📊 Getting current positions...")
-        pos_response = requests.get(pos_url + "?" + pos_params, headers=pos_headers)
-        logging.info(f"📊 Current Position Info: {pos_response.json()}")
-
-        # Step 2: Place order
-        order_req_time = str(int(time.time() * 1000))
-        order_params = {
+        payload = {
             "symbol": symbol,
-            "price": "0",  # Market Order
+            "price": "0",               # Market order
             "vol": quantity,
             "leverage": leverage,
             "side": side,
-            "openType": "isolated",  # Use 'isolated' or 'cross' if supported
+            "open_type": 2,            # 2 = cross margin
             "positionId": 0,
-            "marginMode": margin_mode,
-            "orderType": 1  # 1 = Market Order
+            "marginMode": "crossed",
+            "orderType": 1             # 1 = market order
         }
-        order_body = "&".join([f"{k}={v}" for k, v in order_params.items()])
-        order_sign = generate_signature(order_req_time, order_body)
-
-        order_headers = headers.copy()
-        order_headers.update({
-            "Request-Time": order_req_time,
-            "Signature": order_sign
-        })
 
         logging.info("🟢 Placing new order...")
-        logging.info(f"🔐 Order Payload: {order_params}")
+        logging.info(f"🔐 Order Payload: {payload}")
 
-        order_url = f"{BASE_URL}/api/v1/private/futures/order/place"
-        order_response = requests.post(order_url, headers=order_headers, json=order_params)
-        logging.info(f"✅ Order Response: {order_response.json()}")
-        return order_response.json()
+        url = f"{BASE_URL}/api/v1/private/contract/order/place"
+        signed_payload = sign_request(payload)
+        response = requests.post(url, headers=HEADERS, json=signed_payload)
+        result = response.json()
+        logging.info(f"✅ Order Response: {result}")
+        return result
 
     except Exception as e:
-        logging.error(f"❌ Exception in place_order: {e}")
+        logging.error(f"❌ Exception: {e}")
         return {"error": str(e)}
