@@ -4,26 +4,26 @@ from trade import place_order
 
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
 
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
         data = await request.json()
-        logging.info(f"Incoming webhook data: {data}")
+        logger.info(f"Incoming webhook data: {data}")
 
         action = data.get("action")
         symbol = data.get("symbol")
         quantity = float(data.get("quantity"))
         leverage = int(data.get("leverage"))
 
-        logging.info(f"📦 Parsed → action: {action}, symbol: {symbol}, quantity: {quantity}, leverage: {leverage}")
+        logger.info(f"📦 Parsed → action: {action}, symbol: {symbol}, quantity: {quantity}, leverage: {leverage}")
 
-        # Correct argument order
-        result = place_order(symbol, quantity, leverage, action)
+        result = place_order(action, symbol, quantity, leverage)
+        logger.info(f"📤 Result from place_order: {result}")
 
-        logging.info(f"📤 Result from place_order: {result}")
         return {"status": "ok", "result": result}
 
     except Exception as e:
-        logging.error(f"❌ Error processing webhook: {e}", exc_info=True)
+        logger.exception("❌ Error processing webhook:")
         return {"status": "error", "message": str(e)}
