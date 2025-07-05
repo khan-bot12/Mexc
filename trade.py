@@ -1,75 +1,119 @@
 import time
+import uuid
 import hmac
 import hashlib
 import requests
-import logging
 import os
+import logging
 
-# Load API keys from Render environment variables
+from urllib.parse import urlencode
+from dotenv import load_dotenv
+
+load_dotenv()
+
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
+BASE_URL = "https://contract.mexc.com"
 
-BASE_URL = "https://api.mexc.com"
+logger = logging.getLogger(__name__)
 
-HEADERS = {
-    "Content-Type": "application/json",
-    "ApiKey": API_KEY
-}
+def get_signature(params, secret_key):
+    query_string = urlencode(params)
+    return hmac.new(
+        secret_key.encode('utf-8'),
+        query_string.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
 
-def sign_request(params: dict) -> dict:
-    """Generate MEXC signature for request."""
-    t = str(int(time.time() * 1000))
-    params["timestamp"] = t
-    query_string = '&'.join(f"{key}={params[key]}" for key in sorted(params))
-    signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+def get_position(symbol):
+    """Get the current positions for a symbol."""
+    endpoint = "/api/v1/private/position/list/pos"
+    url = BASE_URL + endpoint
+
+    timestamp = str(int(time.time() * 1000))
+    params = {
+        "api_key": API_KEY,
+        "req_time": timestamp
+    }
+
+    signature = get_signature(params, API_SECRET)
     params["sign"] = signature
-    return params
 
-def get_position(symbol: str):
-    """Fetch current position for given symbol."""
     try:
-        url = f"{BASE_URL}/api/v1/private/contract/position/list/one"
-        params = {
-            "symbol": symbol
-        }
-        signed_params = sign_request(params)
-        response = requests.get(url, headers=HEADERS, params=signed_params)
-        return response.json()
+        response = requests.get(url, params=params)
+        data = response.json()
+        return data
     except Exception as e:
-        logging.error(f"Exception while getting position: {e}")
+        logger.error(f"❌ Exception getting position: {e}")
         return None
 
-def place_order(action, symbol, quantity, leverage):
+def place_order(symbol, quantity, leverage, action):
+    logger.info("📊 Getting current positions...")
+
+    position_info = get_position(symbol)
+    logger.info(f"📊 Current Position Info: {position_info}")
+
+    # Determine the side
+    if action == "buy":
+        side = "OPEN_LONG"
+        close_side = "CLOSE_SHORT"
+    elif action == "sell":
+        side = "OPEN_SHORT"
+        close_side = "CLOSE_LONG"
+    else:
+        return {"error": "Invalid action"}
+
+    # If an opposite position exists, close it first
+    if position_info and position_info.get("success"):
+        for pos in position_info.get("data", []):
+            if pos["symbol"] == symbol and pos["positionSide"] in ["SHORT", "LONG"]:
+                if (action == "buy" and pos["positionSide"] == "SHORT") or \
+                   (action == "sell" and pos["positionSide"] == "LONG"):
+                    logger.info("🔁 Closing opposite position...")
+                    close_payload = {
+                        "api_key": API_KEY,
+                        "req_time": str(int(time.time() * 1000)),
+                        "symbol": symbol,
+                        "price": "0",  # Market
+                        "vol": float(pos["availableVol"]),
+                        "leverage": leverage,
+                        "side": close_side,
+                        "open_type": 2,
+                        "positionId": pos["positionId"],
+                        "orderType": 1
+                    }
+                    close_payload["sign"] = get_signature(close_payload, API_SECRET)
+                    close_url = BASE_URL + "/api/v1/private/order/submit"
+                    try:
+                        close_resp = requests.post(close_url, json=close_payload)
+                        logger.info(f"🔒 Close Order Response: {close_resp.json()}")
+                    except Exception as e:
+                        logger.error(f"❌ Exception closing order: {e}")
+
+    logger.info("🟢 Placing new order...")
+
+    payload = {
+        "api_key": API_KEY,
+        "req_time": str(int(time.time() * 1000)),
+        "symbol": symbol,
+        "price": "0",  # Market price
+        "vol": quantity,
+        "leverage": leverage,
+        "side": side,
+        "open_type": 2,  # 2 = Cross Margin
+        "positionId": 0,
+        "orderType": 1  # 1 = Market
+    }
+
+    payload["sign"] = get_signature(payload, API_SECRET)
+
+    url = BASE_URL + "/api/v1/private/order/submit"
+    logger.info(f"🔐 Order Payload: {payload}")
+
     try:
-        logging.info("📊 Getting current positions...")
-        current_pos = get_position(symbol)
-        logging.info(f"📊 Current Position Info: {current_pos}")
-
-        # Prepare order
-        side = "OPEN_LONG" if action.lower() == "buy" else "OPEN_SHORT"
-
-        payload = {
-            "symbol": symbol,
-            "price": "0",               # Market order
-            "vol": quantity,
-            "leverage": leverage,
-            "side": side,
-            "open_type": 2,            # 2 = cross margin
-            "positionId": 0,
-            "marginMode": "crossed",
-            "orderType": 1             # 1 = market order
-        }
-
-        logging.info("🟢 Placing new order...")
-        logging.info(f"🔐 Order Payload: {payload}")
-
-        url = f"{BASE_URL}/api/v1/private/contract/order/place"
-        signed_payload = sign_request(payload)
-        response = requests.post(url, headers=HEADERS, json=signed_payload)
-        result = response.json()
-        logging.info(f"✅ Order Response: {result}")
-        return result
-
+        response = requests.post(url, json=payload)
+        logger.info(f"✅ Order Response: {response.json()}")
+        return response.json()
     except Exception as e:
-        logging.error(f"❌ Exception: {e}")
+        logger.error(f"❌ Exception placing order: {e}")
         return {"error": str(e)}
