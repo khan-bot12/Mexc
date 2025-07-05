@@ -1,56 +1,76 @@
 import time
-import hashlib
 import hmac
+import hashlib
 import requests
-import logging
 import os
+import logging
 
-# ENV values
+# Load API credentials from environment variables
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
-BASE_URL = "https://api.mexc.com"
 
-# Enable logging
-logging.basicConfig(level=logging.INFO)
+# MEXC Futures base URL (cross margin trading)
+BASE_URL = "https://contract.mexc.com"
+
+# Logging setup
 logger = logging.getLogger("trade")
 
-# Sign function
-def generate_signature(secret, params: dict) -> str:
+# === Generate signature ===
+def generate_signature(secret_key, params):
     sorted_params = sorted(params.items())
-    query_string = '&'.join([f"{key}={value}" for key, value in sorted_params])
-    return hmac.new(secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    query_string = "&".join(f"{k}={v}" for k, v in sorted_params)
+    return hmac.new(secret_key.encode(), query_string.encode(), hashlib.sha256).hexdigest()
 
-# Place order
+# === Get position info (optional, basic structure) ===
+def get_position(symbol):
+    path = "/api/v1/private/position/list/positionHolding"
+    url = BASE_URL + path
+    req_time = str(int(time.time() * 1000))
+    params = {
+        "api_key": API_KEY,
+        "req_time": req_time,
+        "symbol": symbol
+    }
+    sign = generate_signature(API_SECRET, params)
+    params["sign"] = sign
+    response = requests.get(url, params=params)
+    try:
+        return response.json()
+    except Exception as e:
+        logger.error(f"❌ Error in get_position: {e}")
+        return {}
+
+# === Place Order ===
 def place_order(action, symbol, quantity, leverage):
-    logger.info("📊 Getting current positions...")
-
-    # Optional: Get positions logic can go here if needed
-
     logger.info("🟢 Placing new order...")
 
     side = "OPEN_LONG" if action.lower() == "buy" else "OPEN_SHORT"
-
-    path = "/api/v1/private/futures/v1/order/place"
-    url = BASE_URL + path
-
     req_time = str(int(time.time() * 1000))
-    body = {
+
+    payload = {
         "api_key": API_KEY,
         "req_time": req_time,
-        "symbol": symbol.upper(),
-        "price": "0",  # market order
+        "symbol": symbol,
+        "price": "0",  # 0 for market order
         "vol": quantity,
         "leverage": leverage,
         "side": side,
-        "open_type": 2,            # 2 = cross margin
+        "open_type": 2,  # 1=isolated, 2=crossed
         "positionId": 0,
-        "orderType": 1             # 1 = market order
+        "orderType": 1  # 1=market order
     }
 
-    body["sign"] = generate_signature(API_SECRET, body)
+    # Sign the payload
+    payload["sign"] = generate_signature(API_SECRET, payload)
 
-    logger.info(f"🔐 Order Payload: {body}")
-    response = requests.post(url, json=body)
-    result = response.json()
-    logger.info(f"✅ Order Response: {result}")
-    return result
+    logger.info(f"🔐 Order Payload: {payload}")
+
+    try:
+        url = BASE_URL + "/api/v1/private/order/submit"
+        response = requests.post(url, json=payload)
+        result = response.json()
+        logger.info(f"✅ Order Response: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Exception while placing order: {e}")
+        return {"error": str(e)}
