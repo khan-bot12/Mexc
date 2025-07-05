@@ -2,77 +2,84 @@ import time
 import hmac
 import hashlib
 import requests
-import json
 import os
+import logging
 
+# Load your MEXC API keys from Render environment variables
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
+
 BASE_URL = "https://contract.mexc.com"
 
 HEADERS = {
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "ApiKey": API_KEY
 }
 
-def get_timestamp():
-    return str(int(time.time() * 1000))
+# Helper function to create MEXC request signature
+def generate_signature(params):
+    sorted_params = sorted(params.items())
+    query_string = "&".join([f"{key}={value}" for key, value in sorted_params])
+    signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    return signature
 
-def sign(payload, secret):
-    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-
+# Fetch current position to handle one-trade-at-a-time logic
 def get_position(symbol):
-    timestamp = get_timestamp()
-    req_path = f"/api/v1/private/position/open_positions"
-    query = f"api_key={API_KEY}&req_time={timestamp}&symbol={symbol}"
-    signature = sign(query, API_SECRET)
-    url = f"{BASE_URL}{req_path}?{query}&sign={signature}"
+    endpoint = "/api/v1/position/list/history-position"
+    url = BASE_URL + endpoint
+    params = {
+        "symbol": symbol
+    }
+    params["apiKey"] = API_KEY
+    params["reqTime"] = int(time.time() * 1000)
+    params["sign"] = generate_signature(params)
 
+    response = requests.get(url, headers=HEADERS, params=params)
     try:
-        response = requests.get(url, headers=HEADERS)
         return response.json()
     except Exception as e:
-        return {"error": str(e)}
+        logging.error(f"❌ Error in get_position: {e}")
+        return {"code": 500, "msg": str(e)}
 
+# Cancel opposite trade (if long is active and short comes in, or vice versa)
+def cancel_opposite(symbol, side):
+    position_info = get_position(symbol)
+    # Simplified: you can implement logic here to cancel opposite positions if needed.
+    logging.info(f"📊 Current Position Info: {position_info}")
+    return position_info
+
+# Main function to place buy/sell orders
 def place_order(action, symbol, quantity, leverage):
-    timestamp = get_timestamp()
-
-    # Check current position
-    pos_info = get_position(symbol)
-    print("\U0001F4CA Current Position Info:", pos_info)
-
     try:
-        # Check if we need to close opposite side
-        open_side = None
-        if pos_info.get("code") == 200 and pos_info.get("data"):
-            for pos in pos_info["data"]:
-                if pos["positionAmt"] != "0":
-                    open_side = pos["positionSide"]
+        cancel_opposite(symbol, action)
 
-        side = "open_long" if action == "buy" else "open_short"
-
-        endpoint = "/api/v1/private/order/submit"
+        endpoint = "/api/v1/order/submit"
         url = BASE_URL + endpoint
+        order_type = 1  # market order
+        open_type = 1   # cross margin
 
-        payload = {
-            "api_key": API_KEY,
-            "req_time": timestamp,
+        side = 1 if action.lower() == "buy" else 2
+
+        params = {
             "symbol": symbol,
-            "price": 0,  # Market order
+            "price": 0,  # market order
             "vol": quantity,
             "leverage": leverage,
             "side": side,
-            "open_type": "cross",
-            "position_id": 0,
-            "external_oid": str(int(time.time() * 1000))
+            "type": order_type,
+            "openType": open_type,
+            "positionId": 0,
+            "externalOid": str(int(time.time() * 1000)),
+            "apiKey": API_KEY,
+            "reqTime": int(time.time() * 1000)
         }
 
-        sorted_query = "&".join([f"{key}={payload[key]}" for key in sorted(payload)])
-        payload["sign"] = sign(sorted_query, API_SECRET)
+        params["sign"] = generate_signature(params)
 
-        print("\U0001F7E2 Placing new order...")
-        response = requests.post(url, headers=HEADERS, json=payload)
-        print("\u2705 Order Response:", response.json())
+        logging.info("🟢 Placing new order...")
+        response = requests.post(url, headers=HEADERS, json=params)
         return response.json()
 
     except Exception as e:
-        print("❌ Exception:", e)
+        logging.error(f"❌ Exception in place_order: {e}")
         return {"error": str(e)}
