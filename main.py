@@ -20,9 +20,8 @@ async def webhook(request: Request):
 
         result = place_order(action, symbol, quantity, leverage)
         logging.info(f"📤 Result from place_order: {result}")
-
-        return {"status": "ok", "details": result}
-
+        return {"status": "ok", "response": result}
+        
     except Exception as e:
-        logging.error(f"❌ Exception: {str(e)}")
+        logging.error(f"❌ Error: {e}")
         return {"status": "error", "message": str(e)}
