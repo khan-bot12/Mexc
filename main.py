@@ -1,7 +1,5 @@
 from fastapi import FastAPI, Request
 import logging
-import uvicorn
-import json
 from trade import place_order, get_positions
 
 app = FastAPI()
@@ -9,31 +7,29 @@ logging.basicConfig(level=logging.INFO)
 
 @app.post("/webhook")
 async def webhook(request: Request):
-    try:
-        data = await request.json()
-        logging.info(f"Incoming webhook data: {data}")
+    data = await request.json()
+    logging.info(f"Incoming webhook data: {data}")
 
-        # Parse and validate data
-        action = data.get("action", "").lower()
-        symbol = data.get("symbol", "").upper()
-        quantity = float(data.get("quantity", 0))
-        leverage = int(data.get("leverage", 1))
+    try:
+        action = data["action"].lower()
+        symbol = data["symbol"].upper()
+        quantity = float(data["quantity"])
+        leverage = int(data["leverage"])
 
         logging.info(f"📦 Parsed → action: {action}, symbol: {symbol}, quantity: {quantity}, leverage: {leverage}")
 
-        # Optional: View current positions (for debugging or logic)
-        logging.info("📊 Getting current positions...")
-        get_positions(symbol)
+        # Optional: Close opposite position before opening new one
+        position_data = get_positions(symbol)
+        if position_data and position_data.get("success") and "data" in position_data:
+            for pos in position_data["data"]:
+                hold_side = pos.get("holdSide", "").lower()
+                if (action == "buy" and hold_side == "short") or (action == "sell" and hold_side == "long"):
+                    logging.info(f"⚠️ Existing {hold_side} position needs to be closed first (Not yet implemented).")
 
-        # Place order
         result = place_order(action, symbol, quantity, leverage)
         logging.info(f"📤 Result from place_order: {result}")
-        return {"status": "ok", "detail": result}
+        return result
 
     except Exception as e:
-        logging.exception(f"❌ Error processing webhook: {e}")
-        return {"status": "error", "message": str(e)}
-
-# Optional: If you want to run locally
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=10000)
+        logging.error(f"❌ Error processing webhook: {e}")
+        return {"error": str(e)}
