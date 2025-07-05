@@ -2,75 +2,70 @@ import time
 import hmac
 import hashlib
 import requests
-import os
 import logging
+import os
 
-# Load API credentials from environment variables
-API_KEY = os.getenv("MEXC_API_KEY")
-API_SECRET = os.getenv("MEXC_API_SECRET")
+# Load credentials from environment
+MEXC_API_KEY = os.getenv("MEXC_API_KEY")
+MEXC_API_SECRET = os.getenv("MEXC_API_SECRET")
 
-# MEXC Futures base URL (cross margin trading)
+# Set up logger
+logger = logging.getLogger("trade")
+logging.basicConfig(level=logging.INFO)
+
 BASE_URL = "https://contract.mexc.com"
 
-# Logging setup
-logger = logging.getLogger("trade")
-
-# === Generate signature ===
-def generate_signature(secret_key, params):
+def generate_signature(api_secret, req_time, params):
     sorted_params = sorted(params.items())
-    query_string = "&".join(f"{k}={v}" for k, v in sorted_params)
-    return hmac.new(secret_key.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    query_string = "&".join([f"{key}={value}" for key, value in sorted_params])
+    to_sign = f"{query_string}&req_time={req_time}"
+    return hmac.new(api_secret.encode(), to_sign.encode(), hashlib.sha256).hexdigest()
 
-# === Get position info (optional, basic structure) ===
 def get_position(symbol):
-    path = "/api/v1/private/position/list/positionHolding"
-    url = BASE_URL + path
+    url = f"{BASE_URL}/api/v1/private/position/list"
     req_time = str(int(time.time() * 1000))
     params = {
-        "api_key": API_KEY,
-        "req_time": req_time,
-        "symbol": symbol
+        "api_key": MEXC_API_KEY,
+        "req_time": req_time
     }
-    sign = generate_signature(API_SECRET, params)
+    sign = generate_signature(MEXC_API_SECRET, req_time, params)
     params["sign"] = sign
-    response = requests.get(url, params=params)
+
     try:
+        response = requests.get(url, params=params)
         return response.json()
     except Exception as e:
-        logger.error(f"❌ Error in get_position: {e}")
-        return {}
+        logger.error(f"❌ Error fetching position: {e}")
+        return None
 
-# === Place Order ===
 def place_order(action, symbol, quantity, leverage):
-    logger.info("🟢 Placing new order...")
-
-    side = "OPEN_LONG" if action.lower() == "buy" else "OPEN_SHORT"
-    req_time = str(int(time.time() * 1000))
-
-    payload = {
-        "api_key": API_KEY,
-        "req_time": req_time,
-        "symbol": symbol,
-        "price": "0",  # 0 for market order
-        "vol": quantity,
-        "leverage": leverage,
-        "side": side,
-        "open_type": 2,  # 1=isolated, 2=crossed
-        "positionId": 0,
-        "orderType": 1  # 1=market order
-    }
-
-    # Sign the payload
-    payload["sign"] = generate_signature(API_SECRET, payload)
-
-    logger.info(f"🔐 Order Payload: {payload}")
-
     try:
-        url = BASE_URL + "/api/v1/private/order/submit"
-        response = requests.post(url, json=payload)
-        result = response.json()
-        logger.info(f"✅ Order Response: {result}")
-        return result
+        logger.info("🟢 Placing new order...")
+
+        req_time = str(int(time.time() * 1000))
+        side = "OPEN_LONG" if action.lower() == "buy" else "OPEN_SHORT"
+
+        params = {
+            "api_key": MEXC_API_KEY,
+            "req_time": req_time,
+            "symbol": symbol.upper(),
+            "price": "0",  # Market order
+            "vol": quantity,
+            "leverage": leverage,
+            "side": side,
+            "open_type": 2,  # Cross margin
+            "positionId": 0,
+            "orderType": 1,  # Market order
+        }
+
+        sign = generate_signature(MEXC_API_SECRET, req_time, params)
+        params["sign"] = sign
+
+        logger.info(f"🔐 Order Payload: {params}")
+        url = f"{BASE_URL}/api/v1/private/order/submit"
+        response = requests.post(url, data=params)
+        logger.info(f"✅ Order Response: {response.json()}")
+        return response.json()
     except Exception as e:
-        logger.error(f"❌ Exception while placing order: {e}")
+        logger.error(f"❌ Exception in place_order: {e}")
         return {"error": str(e)}
