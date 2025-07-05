@@ -1,17 +1,11 @@
 from fastapi import FastAPI, Request
+import uvicorn
 import logging
-import os
 from trade import place_order
 
-# Initialize app
 app = FastAPI()
-
-# Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Optional token protection (uncomment if using)
-SECRET_TOKEN = os.getenv("WEBHOOK_TOKEN")
+logger = logging.getLogger("main")
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -19,13 +13,9 @@ async def webhook(request: Request):
         data = await request.json()
         logger.info(f"Incoming webhook data: {data}")
 
-        # Optional token check (uncomment if using token in alerts)
-        # if SECRET_TOKEN and data.get("token") != SECRET_TOKEN:
-        #     return {"error": "Unauthorized"}
-
-        # Parse and normalize
-        action = str(data.get("action")).lower()
-        symbol = str(data.get("symbol")).upper()
+        # Extract data from webhook
+        action = data.get("action")
+        symbol = data.get("symbol")
         quantity = float(data.get("quantity"))
         leverage = int(data.get("leverage"))
 
@@ -33,10 +23,13 @@ async def webhook(request: Request):
 
         # Place the order
         result = place_order(action, symbol, quantity, leverage)
-
         logger.info(f"📤 Result from place_order: {result}")
-        return result
+        return {"status": "ok", "result": result}
 
     except Exception as e:
-        logger.exception(f"❌ Error processing webhook: {e}")
-        return {"error": str(e)}
+        logger.error(f"❌ Error processing webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+# Optional: Run this if using `python main.py` locally
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=10000)
