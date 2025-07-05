@@ -11,17 +11,17 @@ async def webhook(request: Request):
         data = await request.json()
         logging.info(f"Incoming webhook data: {data}")
 
-        action = str(data.get("action", "")).lower()
-        symbol = data.get("symbol", "").upper()
-        quantity = float(data.get("quantity", 0))
-        leverage = int(data.get("leverage", 1))
+        action = data.get("action")
+        symbol = data.get("symbol")
+        quantity = float(data.get("quantity"))
+        leverage = int(data.get("leverage"))
 
         logging.info(f"📦 Parsed → action: {action}, symbol: {symbol}, quantity: {quantity}, leverage: {leverage}")
 
-        result = place_order(symbol, action, quantity, leverage)
+        result = place_order(action, symbol, quantity, leverage)
         logging.info(f"📤 Result from place_order: {result}")
-        return result
+        return {"status": "ok", "response": result}
 
     except Exception as e:
-        logging.error(f"❌ Error processing webhook: {e}")
-        return {"error": str(e)}
+        logging.exception(f"❌ Error processing webhook: {e}")
+        return {"status": "error", "message": str(e)}
