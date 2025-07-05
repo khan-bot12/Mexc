@@ -18,10 +18,12 @@ async def webhook(request: Request):
 
         logging.info(f"📦 Parsed → action: {action}, symbol: {symbol}, quantity: {quantity}, leverage: {leverage}")
 
-        result = place_order(action, symbol, quantity, leverage)
+        # Correct argument order
+        result = place_order(symbol, quantity, leverage, action)
+
         logging.info(f"📤 Result from place_order: {result}")
-        return {"status": "ok", "response": result}
+        return {"status": "ok", "result": result}
 
     except Exception as e:
-        logging.exception(f"❌ Error processing webhook: {e}")
+        logging.error(f"❌ Error processing webhook: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
