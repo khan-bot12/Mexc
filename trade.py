@@ -5,72 +5,63 @@ import requests
 import os
 import logging
 
-# Configure logging
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("trade")
 
-# Environment variables
+# Load from environment
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
-BASE_URL = "https://contract.mexc.com"
+BASE_URL = "https://api.mexc.com"  # Official MEXC endpoint
 
-HEADERS = {"Content-Type": "application/json"}
-
-def sign(params):
+def generate_signature(params, secret):
     sorted_params = sorted(params.items())
-    query_string = '&'.join(f"{k}={v}" for k, v in sorted_params)
-    signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
-    return signature
+    query = '&'.join([f"{k}={v}" for k, v in sorted_params])
+    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
-def get_position(symbol):
-    """Get current positions"""
-    path = "/api/v1/position/open_positions"
-    url = BASE_URL + path
-    req_time = str(int(time.time() * 1000))
-    params = {
-        "api_key": API_KEY,
-        "req_time": req_time,
-        "symbol": symbol
-    }
-    params["sign"] = sign(params)
-
-    response = requests.get(url, headers=HEADERS, params=params)
-    logger.info(f"📨 Raw Position Response: {response.text}")  # Log full response
-
+def place_order(action, symbol, quantity, leverage):
     try:
-        return response.json()
+        logger.info("📊 Getting current positions...")
+
+        # Step 1: Get positions
+        timestamp = str(int(time.time() * 1000))
+        pos_params = {
+            "api_key": API_KEY,
+            "req_time": timestamp,
+            "symbol": symbol
+        }
+        pos_params["sign"] = generate_signature(pos_params, API_SECRET)
+
+        pos_resp = requests.get(f"{BASE_URL}/api/v1/private/future/position/open_positions", params=pos_params)
+        logger.info(f"📊 Current Position Info: {pos_resp.json()}")
+
+        # Step 2: Determine side
+        side = "OPEN_LONG" if action.lower() == "buy" else "OPEN_SHORT"
+
+        # Step 3: Build order payload
+        timestamp = str(int(time.time() * 1000))
+        payload = {
+            "api_key": API_KEY,
+            "req_time": timestamp,
+            "symbol": symbol,
+            "price": "0",  # Market order
+            "vol": quantity,
+            "leverage": leverage,
+            "side": side,
+            "open_type": 2,  # Isolated = 1, Cross = 2
+            "positionId": 0,
+            "orderType": 1,  # Market order
+        }
+        payload["sign"] = generate_signature(payload, API_SECRET)
+
+        logger.info(f"🟢 Placing new order...")
+        logger.info(f"🔐 Order Payload: {payload}")
+
+        order_resp = requests.post(f"{BASE_URL}/api/v1/private/future/order/place", data=payload)
+        logger.info(f"✅ Order Response: {order_resp.json()}")
+
+        return order_resp.json()
+
     except Exception as e:
-        logger.error(f"❌ Error parsing position info: {e}")
-        return {"error": str(e)}
-
-def place_order(symbol, quantity, leverage, side):
-    """Place order based on side (buy/sell)"""
-    logger.info("🟢 Placing new order...")
-
-    req_time = str(int(time.time() * 1000))
-    order_side = "OPEN_LONG" if side.lower() == "buy" else "OPEN_SHORT"
-
-    payload = {
-        "api_key": API_KEY,
-        "req_time": req_time,
-        "symbol": symbol,
-        "price": "0",              # market order
-        "vol": quantity,
-        "leverage": leverage,
-        "side": order_side,
-        "open_type": 2,            # 2 = cross margin
-        "positionId": 0,
-        "orderType": 1             # 1 = market order
-    }
-
-    payload["sign"] = sign(payload)
-    logger.info(f"🔐 Order Payload: {payload}")
-
-    url = BASE_URL + "/api/v1/order/submit"
-    try:
-        response = requests.post(url, json=payload, headers=HEADERS)
-        logger.info(f"✅ Order Response: {response.text}")
-        return response.json()
-    except Exception as e:
-        logger.error(f"❌ Order failed: {e}")
+        logger.exception("❌ Error placing order:")
         return {"error": str(e)}
