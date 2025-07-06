@@ -4,65 +4,77 @@ from trade import place_order
 import uvicorn
 from dotenv import load_dotenv
 
-# Initialize the FastAPI app
+load_dotenv()
+
 app = FastAPI()
 
-load_dotenv()  # Load environment variables
-
-# Setup logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger("main")
+
+def format_symbol(symbol: str) -> str:
+    """Convert symbol to MEXC Futures format (ETH_USDT)"""
+    symbol = symbol.upper().replace("-", "_")
+    if not symbol.endswith("_USDT"):
+        if "USDT" in symbol:
+            symbol = symbol.replace("USDT", "_USDT")
+        else:
+            symbol = f"{symbol}_USDT"
+    # Ensure exactly one underscore
+    symbol = symbol.replace("__", "_")
+    return symbol
 
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
         data = await request.json()
-        logger.info(f"📥 Incoming webhook data: {data}")
+        logger.info(f"📥 Incoming webhook: {data}")
 
         # Validate required fields
-        required_fields = ["action", "symbol", "quantity", "leverage"]
-        if not all(field in data for field in required_fields):
-            raise ValueError("Missing required fields in webhook payload")
+        required = ["action", "symbol", "quantity", "leverage"]
+        if not all(field in data for field in required):
+            raise ValueError(f"Missing required fields. Need: {required}")
 
-        # Format symbol correctly for MEXC Futures
-        symbol = data["symbol"].replace("-", "_").replace("USDT", "_USDT")
+        # Format and validate inputs
+        symbol = format_symbol(data["symbol"])
         action = data["action"].lower()
+        if action not in ["buy", "sell"]:
+            raise ValueError("Action must be 'buy' or 'sell'")
+
         quantity = float(data["quantity"])
         leverage = int(data["leverage"])
 
-        logger.info(f"📦 Parsed → Action: {action}, Symbol: {symbol}, "
-                   f"Quantity: {quantity}, Leverage: {leverage}")
+        logger.info(f"⚡ Parsed: {action} {quantity} {symbol} @ {leverage}x")
 
-        # Place order
+        # Execute trade
         result = place_order(action, symbol, quantity, leverage)
         
-        if "error" in result:
-            logger.error(f"❌ Order Failed: {result['error']}")
-            return {
-                "status": "error",
-                "message": result["error"],
-                "symbol": symbol,
-                "action": action
-            }
+        if result.get("error"):
+            logger.error(f"❌ Trade failed: {result['error']}")
+            return {"status": "error", "message": result["error"]}
             
-        logger.info(f"✅ Order Successful: {result}")
-        return {
-            "status": "success",
-            "data": result,
-            "symbol": symbol,
-            "action": action
-        }
+        logger.info(f"✅ Trade successful: {result}")
+        return {"status": "success", "data": result}
 
     except ValueError as ve:
-        logger.error(f"❌ Validation Error: {str(ve)}")
+        logger.error(f"🔴 Validation error: {str(ve)}")
         return {"status": "error", "message": str(ve)}
     except Exception as e:
-        logger.error(f"❌ Unexpected Error: {str(e)}", exc_info=True)
+        logger.error(f"🔴 Unexpected error: {str(e)}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
-# This is required for Render deployment
+@app.get("/test-symbol/{symbol}")
+async def test_symbol(symbol: str):
+    """Test endpoint for symbol formatting"""
+    return {
+        "original": symbol,
+        "formatted": format_symbol(symbol),
+        "valid": format_symbol(symbol).endswith("_USDT")
+    }
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
