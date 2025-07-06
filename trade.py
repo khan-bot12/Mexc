@@ -4,77 +4,84 @@ import hashlib
 import requests
 import logging
 import os
+from typing import Dict, Union
 
 # Set up logging
 logger = logging.getLogger("trade")
 logger.setLevel(logging.INFO)
 
+# API Configuration
+BASE_URL = "https://contract.mexc.com"
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
 
-BASE_URL = "https://contract.mexc.com"
-
-def sign_request(secret, params):
+def sign_request(secret: str, params: Dict) -> str:
+    """Generate HMAC SHA256 signature for MEXC Futures API."""
     sorted_params = sorted(params.items())
     query_string = '&'.join(f"{key}={value}" for key, value in sorted_params)
-    signature = hmac.new(secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
-    return signature
+    return hmac.new(secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
 
-def get_position(symbol):
-    """Fetch current position for the symbol."""
+def get_position_id(symbol: str) -> int:
+    """Get current position ID for the symbol."""
     try:
         endpoint = f"{BASE_URL}/api/v1/private/position/list"
         params = {
             "api_key": API_KEY,
-            "req_time": str(int(time.time() * 1000))
+            "req_time": str(int(time.time() * 1000)),
+            "symbol": symbol.upper()
         }
         params["sign"] = sign_request(API_SECRET, params)
-        response = requests.get(endpoint, params=params)
-        result = response.json()
-        logger.info(f"📊 Current Position Info: {result}")
-        return result
+        
+        headers = {"X-MEXC-APIKEY": API_KEY}
+        response = requests.get(endpoint, params=params, headers=headers)
+        response.raise_for_status()
+        
+        data = response.json()
+        if data.get("success", False) and data.get("data"):
+            return data["data"]["positionId"]
+        return 0
     except Exception as e:
-        logger.error(f"❌ Failed to fetch position: {e}")
-        return None
+        logger.error(f"❌ Position ID Error: {str(e)}")
+        return 0
 
-def place_order(action, symbol, quantity, leverage):
+def place_order(action: str, symbol: str, quantity: Union[str, float], leverage: Union[str, int]) -> Dict:
+    """Place futures order on MEXC."""
     try:
-        logger.info("🟢 Placing new order...")
-
-        side = action.lower()
-        order_side = 1 if side == "buy" else 2  # 1 = OPEN_LONG, 2 = OPEN_SHORT
-        open_type = 2  # 2 = Cross margin
-
+        position_id = get_position_id(symbol)
+        side = 1 if action.lower() == "buy" else 2  # 1=Open Long, 2=Open Short
+        
         payload = {
             "api_key": API_KEY,
             "req_time": str(int(time.time() * 1000)),
             "symbol": symbol.upper(),
             "price": "0",  # Market order
-            "vol": float(quantity),
-            "leverage": int(leverage),
-            "side": order_side,
-            "open_type": open_type,
-            "positionId": 0,
-            "orderType": 1  # 1 = Market Order
+            "vol": str(quantity),
+            "leverage": str(leverage),
+            "side": side,
+            "open_type": 2,  # Cross margin
+            "positionId": position_id,
+            "orderType": 1,  # Market order
+            "type": 1  # 1=open position
         }
-
-        # Sign the payload
+        
         payload["sign"] = sign_request(API_SECRET, payload)
-
+        
         headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "X-MEXC-APIKEY": API_KEY
         }
-
+        
         endpoint = f"{BASE_URL}/api/v1/private/order/submit"
         response = requests.post(endpoint, headers=headers, json=payload)
-
-        logger.info(f"🔐 Order Payload: {payload}")
-        logger.info(f"📩 Raw response text: {response.text}")
-
+        response.raise_for_status()
+        
         result = response.json()
-        logger.info(f"✅ Order Response: {result}")
+        if not result.get("success", False):
+            error_msg = result.get("message", "Unknown error from MEXC")
+            raise Exception(f"MEXC API Error: {error_msg}")
+            
         return result
-
+        
     except Exception as e:
-        logger.error(f"❌ Exception in place_order: {e}")
-        return {"error": str(e)}
+        logger.error(f"❌ Order Error: {str(e)}", exc_info=True)
+        return {"error": str(e), "success": False}
