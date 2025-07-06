@@ -15,6 +15,16 @@ BASE_URL = "https://contract.mexc.com"
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
 
+# MEXC Error Codes
+ERROR_CODES = {
+    10001: "Invalid symbol",
+    10002: "Invalid order type",
+    10003: "Invalid price",
+    10004: "Invalid quantity",
+    10005: "Trading restricted",
+    10006: "Insufficient balance"
+}
+
 def sign_request(secret: str, params: Dict) -> str:
     """Generate HMAC SHA256 signature"""
     sorted_params = sorted(params.items())
@@ -31,6 +41,17 @@ def verify_symbol(symbol: str) -> str:
     if not symbol.endswith("_USDT"):
         raise ValueError(f"Invalid symbol {symbol}. Must end with _USDT")
     return symbol
+
+def handle_api_error(response) -> str:
+    """Parse MEXC API errors"""
+    try:
+        error_data = response.json()
+        code = error_data.get("code")
+        if code in ERROR_CODES:
+            return f"{ERROR_CODES[code]} (Code {code})"
+        return error_data.get("message", f"Unknown error (Status {response.status_code})")
+    except:
+        return f"HTTP {response.status_code}: {response.text}"
 
 def get_position_id(symbol: str) -> int:
     """Get position ID for symbol (0 if new position)"""
@@ -103,19 +124,31 @@ def place_order(
         response = requests.post(endpoint, headers=headers, json=payload)
         logger.debug(f"📩 Response: {response.status_code} {response.text}")
         
-        response.raise_for_status()
+        if response.status_code != 200:
+            error_msg = handle_api_error(response)
+            raise Exception(f"MEXC API Error: {error_msg}")
+            
         result = response.json()
         
         if not result.get("success"):
-            error = result.get("message", "Unknown API error")
-            raise Exception(f"MEXC: {error}")
+            error_msg = result.get("message", "Unknown API error")
+            if "code" in result:
+                error_msg = f"Code {result['code']}: {error_msg}"
+            raise Exception(error_msg)
             
-        return result
+        return {
+            "success": True,
+            "order_id": result.get("data", {}).get("orderId"),
+            "symbol": symbol,
+            "quantity": quantity,
+            "leverage": leverage,
+            "side": "long" if side == 1 else "short"
+        }
         
-    except requests.exceptions.HTTPError as http_err:
-        error = f"HTTP {http_err.response.status_code}: {http_err.response.text}"
-        logger.error(f"❌ Order failed: {error}")
-        return {"error": error, "success": False}
+    except requests.exceptions.RequestException as re:
+        error_msg = f"Network error: {str(re)}"
+        logger.error(f"❌ Order failed: {error_msg}")
+        return {"error": error_msg, "success": False}
     except Exception as e:
         logger.error(f"❌ Order error: {str(e)}")
         return {"error": str(e), "success": False}
