@@ -1,32 +1,15 @@
 from fastapi import FastAPI, Request
-import logging
-import time
-from trade import place_order
 import uvicorn
-from dotenv import load_dotenv
+import logging
+import os
+from trade import place_order
 
-load_dotenv()
-
-app = FastAPI()
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("main")
 
-def format_symbol(symbol: str) -> str:
-    """Convert symbol to MEXC Futures format (ETH_USDT)"""
-    symbol = symbol.upper().replace("-", "_")
-    if not symbol.endswith("_USDT"):
-        if "USDT" in symbol:
-            symbol = symbol.replace("USDT", "_USDT")
-        else:
-            symbol = f"{symbol}_USDT"
-    # Ensure exactly one underscore
-    return symbol.replace("__", "_")
+# FastAPI app
+app = FastAPI()
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -34,69 +17,26 @@ async def webhook(request: Request):
         data = await request.json()
         logger.info(f"📥 Incoming webhook: {data}")
 
-        # Validate required fields
-        required = ["action", "symbol", "quantity", "leverage"]
-        if not all(field in data for field in required):
-            raise ValueError(f"Missing required fields. Need: {required}")
+        # Extract and validate fields
+        action = data.get("action")
+        symbol = data.get("symbol")
+        quantity = data.get("quantity")
+        leverage = data.get("leverage")
 
-        # Format and validate inputs
-        symbol = format_symbol(data["symbol"])
-        action = data["action"].lower()
-        if action not in ["buy", "sell"]:
-            raise ValueError("Action must be 'buy' or 'sell'")
-
-        quantity = float(data["quantity"])
-        leverage = int(data["leverage"])
+        if not all([action, symbol, quantity, leverage]):
+            logger.error("❌ Missing required fields in webhook payload.")
+            return {"error": "Missing required fields"}
 
         logger.info(f"⚡ Parsed: {action} {quantity} {symbol} @ {leverage}x")
 
-        # Execute trade
         result = place_order(action, symbol, quantity, leverage)
-        
-        if result.get("error"):
-            logger.error(f"❌ Trade failed: {result['error']}")
-            return {
-                "status": "error",
-                "message": result["error"],
-                "symbol": symbol,
-                "action": action,
-                "timestamp": int(time.time() * 1000)
-            }
-            
-        logger.info(f"✅ Trade successful: {result}")
-        return {
-            "status": "success",
-            "symbol": symbol,
-            "action": action,
-            "quantity": quantity,
-            "leverage": leverage,
-            "order_id": result.get("order_id"),
-            "timestamp": int(time.time() * 1000)
-        }
+        logger.info(f"📤 Result from place_order: {result}")
+        return result
 
-    except ValueError as ve:
-        logger.error(f"🔴 Validation error: {str(ve)}")
-        return {"status": "error", "message": str(ve)}
     except Exception as e:
-        logger.error(f"🔴 Unexpected error: {str(e)}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        logger.error(f"❌ Error processing webhook: {e}")
+        return {"error": str(e)}
 
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "active",
-        "exchange": "MEXC Futures",
-        "timestamp": int(time.time() * 1000)
-    }
-
-@app.get("/test-symbol/{symbol}")
-async def test_symbol(symbol: str):
-    """Test endpoint for symbol formatting"""
-    return {
-        "original": symbol,
-        "formatted": format_symbol(symbol),
-        "valid": format_symbol(symbol).endswith("_USDT")
-    }
-
+# For local testing (if needed)
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
