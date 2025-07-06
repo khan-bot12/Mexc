@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
 import logging
+import time
 from trade import place_order
 import uvicorn
 from dotenv import load_dotenv
@@ -25,8 +26,7 @@ def format_symbol(symbol: str) -> str:
         else:
             symbol = f"{symbol}_USDT"
     # Ensure exactly one underscore
-    symbol = symbol.replace("__", "_")
-    return symbol
+    return symbol.replace("__", "_")
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -55,10 +55,24 @@ async def webhook(request: Request):
         
         if result.get("error"):
             logger.error(f"❌ Trade failed: {result['error']}")
-            return {"status": "error", "message": result["error"]}
+            return {
+                "status": "error",
+                "message": result["error"],
+                "symbol": symbol,
+                "action": action,
+                "timestamp": int(time.time() * 1000)
+            }
             
         logger.info(f"✅ Trade successful: {result}")
-        return {"status": "success", "data": result}
+        return {
+            "status": "success",
+            "symbol": symbol,
+            "action": action,
+            "quantity": quantity,
+            "leverage": leverage,
+            "order_id": result.get("order_id"),
+            "timestamp": int(time.time() * 1000)
+        }
 
     except ValueError as ve:
         logger.error(f"🔴 Validation error: {str(ve)}")
@@ -66,6 +80,14 @@ async def webhook(request: Request):
     except Exception as e:
         logger.error(f"🔴 Unexpected error: {str(e)}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "active",
+        "exchange": "MEXC Futures",
+        "timestamp": int(time.time() * 1000)
+    }
 
 @app.get("/test-symbol/{symbol}")
 async def test_symbol(symbol: str):
