@@ -31,52 +31,52 @@ def place_order(action: str, symbol: str, quantity: float, leverage: int):
     try:
         logger.info("🟢 Placing new order...")
 
-        # Convert action to side (1 = buy, 2 = sell)
         side = 1 if action.lower() == "buy" else 2
-
-        # Convert symbol to MEXC format
         symbol = symbol.replace("USDT", "_USDT")
 
-        # Prepare request parameters
         params = {
             "api_key": API_KEY,
             "req_time": get_timestamp(),
             "symbol": symbol,
-            "price": "0",            # Market order
+            "price": "0",
             "vol": str(quantity),
             "leverage": str(leverage),
             "side": side,
-            "open_type": 2,          # Isolated margin
-            "positionId": 0,         # Auto-detect
-            "orderType": 1,          # Open
-            "type": 1                # Market order
+            "open_type": 2,
+            "positionId": 0,
+            "orderType": 1,
+            "type": 1
         }
 
-        # Sign the request
         params["sign"] = sign_request(params, API_SECRET)
         logger.info(f"🔐 Order Payload: {params}")
 
-        # Set headers for JSON request
         headers = {
             "Content-Type": "application/json"
         }
 
-        # Send order to MEXC
-        response = requests.post(
-            f"{BASE_URL}/api/v1/private/order/submit",
-            json=params,
-            headers=headers
-        )
+        try:
+            response = requests.post(
+                f"{BASE_URL}/api/v1/private/order/submit",
+                json=params,
+                headers=headers
+            )
 
-        # Log raw response
-        logger.info(f"📩 Raw response text: {response.text}")
-        logger.info(f"📊 Status Code: {response.status_code}")
+            # Console output (Render will show this in logs)
+            print(">>> STATUS CODE:", response.status_code)
+            print(">>> RESPONSE TEXT:", response.text)
 
-        # Log parsed response
-        result = response.json()
-        logger.info(f"✅ Parsed Response: {result}")
+            logger.info(f"📩 Raw response text: {response.text}")
+            logger.info(f"📊 Status Code: {response.status_code}")
 
-        return result
+            result = response.json()
+            logger.info(f"✅ Parsed Response: {result}")
+
+            return result
+
+        except Exception as post_error:
+            logger.error(f"❌ requests.post failed: {post_error}")
+            return {"error": str(post_error)}
 
     except Exception as e:
         logger.error(f"❌ Error placing order: {e}")
